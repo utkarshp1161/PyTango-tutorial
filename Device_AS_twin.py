@@ -84,6 +84,7 @@ class DeviceASTwin(Device):
         self._detector_C_dwell_time = 0.1
         self._detector_C_resolution = 256
         
+        
         # Set initial state
         self.set_state(DevState.INIT)
         self.set_status("Device initialized. Use Connect command to connect to microscope.")
