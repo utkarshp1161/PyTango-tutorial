@@ -1,0 +1,48 @@
+from autoscript_tem_microscope_client import TemMicroscopeClient
+from autoscript_tem_microscope_client.enumerations import DetectorType, ImageSize
+
+# Connect to the microscope
+microscope = TemMicroscopeClient()
+microscope.connect("localhost")
+
+# Acquire the HAADF image
+# This returns an AdornedImage object
+haadf_image = microscope.acquisition.acquire_stem_image(DetectorType.HAADF, ImageSize.PRESET_1024, 1e-6)
+
+# Acquire advanced STEM images with multiple detectors, segments, and a custom scan region
+# 1. Select specific segments from a segmented detector
+df_s = microscope.detectors.get_scanning_detector(DetectorType.DF_S)
+df_s.set_enabled_segments(DetectorSegmentType.OUTER_RING)
+segments = df_s.get_enabled_segments() # Retrieves the active outer ring segments
+
+# 2. Select a full non-segmented detector
+detector_types = [DetectorType.HAADF]
+
+# 3. Define a custom scan region (e.g., top-left corner, 20% width and 80% height of the area)
+custom_region = Region(
+    RegionCoordinateSystem.RELATIVE, 
+    Rectangle(0, 0, 0.2, 0.8)
+)
+
+# 4. Create the advanced settings structure
+settings = StemAcquisitionSettings(
+    dwell_time=1e-6,
+    detector_types=detector_types,
+    detector_segments=segments,
+    size=1024,                # Base resolution
+    region=custom_region,     # Cropped to the defined rectangle
+    auto_beam_blank=False
+)
+
+# 5. Acquire the images
+print("Starting advanced STEM acquisition...")
+images = microscope.acquisition.acquire_stem_images_advanced(settings)
+
+# The result is a list of AdornedImage objects. 
+# Images from detector_types are returned first, followed by the specific segments.
+haadf_image = images
+dfs_outer_1 = images[3]
+# ... and so on for the remaining segments
+
+print(f"Acquired {len(images)} images simultaneously.")
+
