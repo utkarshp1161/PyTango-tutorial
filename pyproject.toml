@@ -3,13 +3,35 @@ name = "PyTango-tutorial"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.11,<3.13"
+requires-python = ">3.11"
 dependencies = [
+    "autoscript-core",
+    "autoscript-tem-microscope-client",
+    "autoscript-tem-microscope-client-tests",
+    "autoscript-tem-snippets-tests",
+    "autoscript-tem-toolkit",
+    "colorama>=0.4.6",
+    "defusedxml>=0.7.1",
     "gevent>=25.9.1",
+    "h5py>=3.15.1",
     "ipykernel>=7.1.0",
     "jupyter>=1.1.1",
+    "lxml>=6.0.2",
     "matplotlib>=3.10.7",
     "multiprocess>=0.70.19",
     "numpy>=2.3.5",
+    "opencv-python>=4.13.0.92",
+    "pillow>=12.1.0",
+    "pyside6>=6.10.2",
     "pytango==10.1.2",
+    "pytest>=9.0.2",
+    "thermoscientific-logging",
 ]
+
+[tool.uv.sources]
+autoscript-core = { path = "PythonPackages-AS-1.15/autoscript_core-1.0.0-py3-none-any.whl" }
+autoscript-tem-microscope-client-tests = { path = "PythonPackages-AS-1.15/autoscript_tem_microscope_client_tests-1.15.0-py3-none-any.whl" }
+autoscript-tem-microscope-client = { path = "PythonPackages-AS-1.15/autoscript_tem_microscope_client-1.15.0-py3-none-any.whl" }
+autoscript-tem-snippets-tests = { path = "PythonPackages-AS-1.15/autoscript_tem_snippets_tests-1.15.0-py3-none-any.whl" }
+autoscript-tem-toolkit = { path = "PythonPackages-AS-1.15/autoscript_tem_toolkit-1.15.0-py3-none-any.whl" }
+thermoscientific-logging = { path = "PythonPackages-AS-1.15/thermoscientific_logging-1.0.0-py3-none-any.whl" }
