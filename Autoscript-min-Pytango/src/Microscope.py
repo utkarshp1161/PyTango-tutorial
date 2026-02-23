@@ -39,6 +39,7 @@ except ImportError:
     _AUTOSCRIPT_AVAILABLE = False
 
 print(_AUTOSCRIPT_AVAILABLE)
+
 class Microscope(Device):
     """
     Top-level TEM microscope device.
@@ -121,6 +122,7 @@ class Microscope(Device):
         except Exception as e:
             self.error_stream(f"AutoScript connection failed: {e}")
             self.set_state(DevState.FAULT)
+            self._microscope = None
 
     def _connect_detector_proxies(self) -> None:
         """Build DeviceProxy objects for each configured detector device."""
