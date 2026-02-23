@@ -38,7 +38,7 @@ try:
 except ImportError:
     _AUTOSCRIPT_AVAILABLE = False
 
-
+print(_AUTOSCRIPT_AVAILABLE)
 class Microscope(Device):
     """
     Top-level TEM microscope device.
@@ -59,8 +59,8 @@ class Microscope(Device):
     )
 
     autoscript_host_port = device_property(
-        dtype=str,
-        default_value="9090",
+        dtype=int,
+        default_value=9090,
         doc="Hostname or IP of the AutoScript microscope server",
     )
 
@@ -116,8 +116,8 @@ class Microscope(Device):
             return
         try:
             self._microscope = TemMicroscopeClient()
-            self._microscope.connect(self.autoscript_host)
-            self.info_stream(f"Connected to AutoScript at {self.autoscript_host}")
+            self._microscope.connect(self.autoscript_host_ip, self.autoscript_host_port)
+            self.info_stream(f"Connected to AutoScript at {self.autoscript_host_ip}:{self.autoscript_host_port}")
         except Exception as e:
             self.error_stream(f"AutoScript connection failed: {e}")
             self.set_state(DevState.FAULT)
@@ -229,12 +229,13 @@ class Microscope(Device):
         """
         if self._microscope is not None:
             # Real AutoScript path
-            # detector_type = DetectorType[detector_name.upper()]
-            # adorned = self._microscope.acquisition.acquire_stem_image(
-            #     detector_type, ImageSize.PRESET_1024, dwell_time
-            # )
-            # return adorned.data
-            pass  # remove this line when uncommenting above
+            if detector_name.upper() == "HAADF":
+                detector_type = DetectorType.HAADF # :TODO --> make it general and check
+                adorned = self._microscope.acquisition.acquire_stem_image(
+                    detector_type, ImageSize.PRESET_1024, dwell_time
+                )
+                return adorned.data
+            # pass  # remove this line when uncommenting above
 
         # Simulation fallback
         self.warn_stream("Simulating image acquisition (AutoScript not connected)")

@@ -1,38 +1,85 @@
 """
-Shared pytest fixtures for all device tests.
+Shared pytest fixtures for Tango device tests.
 
-Uses tango.test_context.DeviceTestContext to spin up real Tango
-device servers in-process — no external Tango DB or network needed.
+Starts BOTH the detector device(s) and the Microscope device in ONE Tango
+test device server using MultiDeviceTestContext, so the Microscope can
+create DeviceProxy connections to detectors by device name.
 
-Usage in a test file::
-
-    def test_something(haadf_proxy):
-        haadf_proxy.dwell_time = 2e-6
-        assert haadf_proxy.dwell_time == 2e-6
+This avoids:
+- "No proxy found for detector 'haadf'. Available: []"
+- Needing a real Tango DB
+- Flaky multi-context issues from spinning up multiple separate servers
 """
 
 import pytest
-from tango.test_context import DeviceTestContext
+import tango
+from tango.test_context import MultiDeviceTestContext
 
 # Import device classes to test
 from src.detectors.HAADF import HAADF
-from src.Microscope import Microscope
+from src.Microscope import Microscope as RealMicroscope
+
+
+# ---- Test-only microscope subclass ----
+# Your Microscope._connect_autoscript() currently references self.autoscript_host
+# but you only defined autoscript_host_ip/autoscript_host_port.
+# In CI you don't want AutoScript anyway, so we bypass it here.
+class TestMicroscope(RealMicroscope):
+    def _connect_autoscript(self) -> None:
+        self.warn_stream("AutoScript disabled in tests (forcing simulation mode)")
+        self._microscope = None
 
 
 @pytest.fixture(scope="module")
-def haadf_proxy():
-    """Live DeviceProxy to a HAADF device running in a test context."""
-    with DeviceTestContext(HAADF) as proxy:
-        yield proxy
+def tango_ctx():
+    """
+    One Tango device server hosting HAADF + Microscope together.
+
+    Device names here MUST match what you put into Microscope properties.
+    """
+    devices_info = [
+        {
+            "class": HAADF,
+            "devices": [
+                {
+                    "name": "test/nodb/haadf",
+                    "properties": {
+                        # put HAADF defaults here if you want
+                        # e.g. "dwell_time": 2e-6  (only if it's a device_property)
+                    },
+                }
+            ],
+        },
+        {
+            "class": TestMicroscope,
+            "devices": [
+                {
+                    "name": "test/nodb/microscope",
+                    "properties": {
+                        # IMPORTANT: address must match the HAADF device name above
+                        "haadf_device_address": "test/nodb/haadf",
+                        # you can also set these if you later fix autoscript_host usage
+                        "autoscript_host_ip": "localhost",
+                        "autoscript_host_port": "9090",
+                    },
+                }
+            ],
+        },
+    ]
+
+    # process=False keeps everything in the same process (fast, debuggable).
+    # Also we only create ONE context, so the "second DeviceTestContext segfault"
+    # issue doesn't apply.
+    ctx = MultiDeviceTestContext(devices_info, process=False)
+    with ctx:
+        yield ctx
 
 
 @pytest.fixture(scope="module")
-def microscope_proxy():
-    """
-    Live DeviceProxy to a Microscope device running in a test context.
+def haadf_proxy(tango_ctx) -> tango.DeviceProxy:
+    return tango.DeviceProxy("test/nodb/haadf")
 
-    Note: AutoScript will not be available in CI — the Microscope device
-    detects this and falls back to simulation mode automatically.
-    """
-    with DeviceTestContext(Microscope) as proxy:
-        yield proxy
+
+@pytest.fixture(scope="module")
+def microscope_proxy(tango_ctx) -> tango.DeviceProxy:
+    return tango.DeviceProxy("test/nodb/microscope")
