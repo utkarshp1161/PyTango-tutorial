@@ -71,6 +71,12 @@ class Microscope(Device):
             "DB mode: 'test/detector/haadf' "
             "No-DB mode: 'tango://127.0.0.1:8888/test/nodb/haadf#dbase=no'",
 )
+    advanced_acquisition_device_address = device_property(
+        dtype=str,
+        doc="Tango device address for the HAADF settings device. "
+            "DB mode: 'test/detector/advancedacquisition' "
+            "No-DB mode: 'tango://127.0.0.1:8888/test/nodb/advancedacquisition#dbase=no'",
+)
 
     # Add further detector device_property entries here as detectors are added
     # eds_device_address   = device_property(dtype=str, default_value="test/detector/eds")
@@ -129,6 +135,8 @@ class Microscope(Device):
         # Extend this dict as more detectors are added
         addresses: dict[str, str] = {
             "haadf": self.haadf_device_address,
+            "AdvancedAcquistion": self.advanced_acquisition_device_address,
+            # "BF"
             # "eds":  self.eds_device_address,
         }
         for name, address in addresses.items():
@@ -137,6 +145,7 @@ class Microscope(Device):
                 self.info_stream(f"Connected to detector proxy: {name} @ {address}")
             except tango.DevFailed as e:
                 self.error_stream(f"Failed to connect to {name} proxy at {address}: {e}")
+
 
     # ------------------------------------------------------------------
     # Attribute read methods
@@ -163,7 +172,7 @@ class Microscope(Device):
         self.set_state(DevState.OFF)
         self.info_stream("Disconnected from AutoScript")
 
-    @command(dtype_in=str, dtype_out=DevEncoded)
+    @command(dtype_in=str, dtype_out=DevEncoded)#In PyTango, DevEncoded is a special Tango data type designed to send binary data + a small description string together as a single return value.
     def get_image(self, detector_name: str) -> tuple[str, bytes]:
         """
         Acquire a single STEM image from the named detector.
@@ -213,6 +222,82 @@ class Microscope(Device):
 
         return json.dumps(metadata), adorned_image.tobytes()
 
+    @command(dtype_in=('str',), dtype_out=str)
+    def get_images(self, detector_names: list[str]) -> str:
+        """
+        Acquire multiple STEM images simultaneously.
+
+        Parameters
+        ----------
+        detector_names: list of detector names, e.g. ["HAADF", "BF"]
+
+        Returns
+        -------
+        JSON string with metadata for all images and retrieval instructions
+        
+        Usage: Call get_image_data(index) to retrieve each image's bytes
+        """
+        # Normalize and validate
+        detector_names = [name.lower().strip() for name in detector_names]
+        for name in detector_names:
+            if name not in self._detector_proxies:
+                tango.Except.throw_exception(
+                    "UnknownDetector",
+                    f"Unknown detector: {name}",
+                    "get_images()"
+                )
+        
+        # Get settings from AdvancedAcquisition device
+        adv_acq_proxy = self._detector_proxies.get("AdvancedAcquistion")
+        dwell_time = adv_acq_proxy.dwell_time
+        base_resolution = adv_acq_proxy.base_resolution
+        scan_region = adv_acq_proxy.scan_region
+        auto_beam_blank = adv_acq_proxy.auto_beam_blank
+        
+        # Acquire all images
+        adorned_images = self._acquire_stem_image_advanced(
+            detector_names,
+            base_resolution,
+            scan_region,
+            dwell_time,
+            auto_beam_blank
+        )
+        
+        # Package results
+        # Cache and build metadata
+        self._cached_images = adorned_images
+        timestamp = time.time()
+        
+        metadata_list = []
+        for i, (name, adorned_img) in enumerate(zip(detector_names, adorned_images)):
+            # Access the numpy array from AdornedImage
+            img_data = adorned_img.data if hasattr(adorned_img, 'data') else adorned_img
+            
+            metadata_list.append({
+                "index": i,
+                "detector": name,
+                "shape": list(img_data.shape),
+                "dtype": str(img_data.dtype),
+                "timestamp": timestamp,
+            })
+        
+        return json.dumps({"images": metadata_list, "count": len(adorned_images)})
+
+    @command(dtype_in=int, dtype_out=DevEncoded)
+    def get_image_data_cached(self, index: int) -> tuple[str, bytes]:
+        """Retrieve cached image by index."""
+        if not hasattr(self, '_cached_images'):
+            tango.Except.throw_exception("NoCache", "Call get_images() first", "get_image_data()")
+        if index >= len(self._cached_images):
+            tango.Except.throw_exception("InvalidIndex", f"Index {index} out of range", "get_image_data()")
+        
+        adorned_img = self._cached_images[index]
+        # Extract numpy array from AdornedImage
+        img_data = adorned_img.data if hasattr(adorned_img, 'data') else adorned_img
+        
+        meta = {"shape": list(img_data.shape), "dtype": str(img_data.dtype)}
+        return json.dumps(meta), img_data.tobytes()
+
     # ------------------------------------------------------------------
     # Internal acquisition helpers
     # ------------------------------------------------------------------
@@ -243,6 +328,67 @@ class Microscope(Device):
         self.warn_stream("Simulating image acquisition (AutoScript not connected)")
         rng = np.random.default_rng()
         return rng.integers(0, 65535, size=(height, width), dtype=np.uint16)
+
+    def _acquire_stem_image_advanced(
+        self,
+        detector_names: list[str],
+        base_resolution: int,
+        scan_region: list[float],
+        dwell_time: float,
+        auto_beam_blank: bool,
+    ) -> list[np.ndarray]:
+        """Acquire images from multiple detectors simultaneously."""
+
+        if self._microscope is not None:
+            # Real AutoScript
+            detector_types = []
+            for name in detector_names:
+                if name == "haadf":
+                    detector_types.append(DetectorType.HAADF)
+                elif name == "bf":
+                    detector_types.append(DetectorType.BF)
+                # Add more detector types as needed
+            
+            # Create scan region
+            from autoscript_tem_microscope_client.structures import Region, Rectangle
+            from autoscript_tem_microscope_client.enumerations import RegionCoordinateSystem
+            from autoscript_tem_microscope_client.structures import StemAcquisitionSettings
+
+            # Create scan region
+            custom_region = Region(
+                RegionCoordinateSystem.RELATIVE,
+                Rectangle(
+                    scan_region[0],  # left
+                    scan_region[1],  # top
+                    scan_region[2],  # width
+                    scan_region[3]   # height
+                )
+            )
+        
+            # TODO -----> handle segments
+
+            settings = StemAcquisitionSettings(
+                dwell_time=dwell_time,
+                detector_types=detector_types,
+                size=base_resolution,
+                region=custom_region,
+                auto_beam_blank=auto_beam_blank
+            )
+            
+            return self._microscope.acquisition.acquire_stem_images_advanced(settings)
+        
+        # Simulation fallback
+        self.warn_stream(f"Simulating acquisition for {detector_names}")
+        rng = np.random.default_rng()
+        
+        # Calculate cropped dimensions based on scan_region
+        height = int(base_resolution * scan_region[3])
+        width = int(base_resolution * scan_region[2])
+        
+        return [rng.integers(0, 65535, size=(height, width), dtype=np.uint16) 
+                for _ in detector_names]
+
+
 
 
 # ----------------------------------------------------------------------
